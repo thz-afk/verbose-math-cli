@@ -1,37 +1,31 @@
-#[derive(Debug)]
-pub enum TokenType {
-    PLUS,
-    MINUS,
-    MULTIPLY,
-    DIVIDE,
-    POW,
-    NUMBER,
+#[derive(Debug, Clone, PartialEq)]
+pub enum TType {
+    ADD, SUB, MUL, DIV, POW, MOD,
+    LPAR, RPAR,
+    NUM,
+    SQRT, ABS,
 }
 
-pub struct Token {
-    pub token_type: TokenType,
-    pub value: i32,
+#[derive(Debug, Clone)]
+pub struct Tok {
+    pub typ: TType,
+    pub val: f64,
 }
 
-impl Token {
-    pub fn new(token_type: TokenType, value: i32) -> Token {
-        Token { token_type, value }
-    }
-
-    pub fn get_value(&self) -> i32 {
-        self.value
+impl Tok {
+    pub fn new(typ: TType, val: f64) -> Tok {
+        Tok { typ, val }
     }
 }
 
-impl TokenType {
-    pub fn get_name(&self) -> String {
+impl TType {
+    pub fn prec(&self) -> i32 {
         match self {
-            Self::PLUS => "+".to_string(),
-            Self::MINUS => "-".to_string(),
-            Self::MULTIPLY => "*".to_string(),
-            Self::DIVIDE => "/".to_string(),
-            Self::POW => "^".to_string(),
-            Self::NUMBER => "N".to_string(),
+            Self::ADD | Self::SUB => 1,
+            Self::MUL | Self::DIV | Self::MOD => 2,
+            Self::POW => 3,
+            Self::SQRT | Self::ABS => 4,
+            _ => 0,
         }
     }
 }
