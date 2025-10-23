@@ -1,5 +1,5 @@
 use thiserror::Error;
-
+// ^^ keep it clean and... and.
 #[derive(Error, Debug)]
 pub enum CalcError {
     #[error("Division by zero")]
