@@ -1,139 +1,163 @@
-use crate::token::{Token, TokenType};
-use std::process;
+use crate::token::{Tok, TType};
+use crate::error::{CalcError, CalcResult};
 
-pub struct Scanner<'s> {
-    source: &'s str,
-    tokens: Vec<Token>,
-    current: usize,
-    line: usize,
+pub struct Scanner {
+    src: String,
+    toks: Vec<Tok>,
+    cur: usize,
 }
 
-// Constructor
-impl<'s> Scanner<'s> {
-    pub fn new<'a>(source: &'a str) -> Scanner<'a> {
+impl Scanner {
+    pub fn new(src: &str) -> Scanner {
         Scanner {
-            source,
-            tokens: Vec::new(),
-            current: 0,
-            line: 1,
+            src: src.to_string(),
+            toks: Vec::new(),
+            cur: 0,
         }
     }
 
-    pub fn scan(&mut self) -> &Vec<Token> {
-        while !self.is_at_end() {
-            self.scan_token();
+    pub fn scan(&mut self) -> CalcResult<Vec<Tok>> {
+        while !self.end() {
+            self.scan_tok()?;
         }
-
-        &self.tokens
+        Ok(self.toks.clone())
     }
-}
 
-impl<'s> Scanner<'s> {
-    fn scan_token(&mut self) {
-        let character = self.advance();
+    fn scan_tok(&mut self) -> CalcResult<()> {
+        let ch = self.adv();
 
-        match character {
+        match ch {
             'p' => {
-                if self.peek_word("plus") {
-                    self.tokens.push(Token::new(TokenType::PLUS, 0));
-                } else if self.peek_word("pow") {
-                    self.tokens.push(Token::new(TokenType::POW, 0));
+                if self.word("plus") {
+                    self.toks.push(Tok::new(TType::ADD, 0.0));
+                } else if self.word("pow") {
+                    self.toks.push(Tok::new(TType::POW, 0.0));
                 } else {
-                    self.throw_error("Unexpected character");
+                    return Err(CalcError::UnexpectedChar(format!("p{}", self.rest())));
                 }
             }
             'm' => {
-                // Multiply, Minus
-                if self.peek_word("multiply") {
-                    self.tokens.push(Token::new(TokenType::MULTIPLY, 0));
-                } else if self.peek_word("minus") {
-                    self.tokens.push(Token::new(TokenType::MINUS, 0));
+                if self.word("mult") || self.word("multiply") {
+                    self.toks.push(Tok::new(TType::MUL, 0.0));
+                } else if self.word("minus") {
+                    self.toks.push(Tok::new(TType::SUB, 0.0));
+                } else if self.word("mod") {
+                    self.toks.push(Tok::new(TType::MOD, 0.0));
                 } else {
-                    self.throw_error("Unexpected character");
+                    return Err(CalcError::UnexpectedChar(format!("m{}", self.rest())));
                 }
             }
             'd' => {
-                // Divide
-                if self.peek_word("divide") {
-                    self.tokens.push(Token::new(TokenType::DIVIDE, 0));
+                if self.word("div") || self.word("divide") {
+                    self.toks.push(Tok::new(TType::DIV, 0.0));
                 } else {
-                    self.throw_error("Unexpected character");
+                    return Err(CalcError::UnexpectedChar(format!("d{}", self.rest())));
                 }
             }
-            ' ' => {}
-            '\n' | '\r' | '\t' => {
-                self.line += 1;
+            's' => {
+                if self.word("sqrt") {
+                    self.toks.push(Tok::new(TType::SQRT, 0.0));
+                } else {
+                    return Err(CalcError::UnexpectedChar(format!("s{}", self.rest())));
+                }
             }
+            'a' => {
+                if self.word("abs") {
+                    self.toks.push(Tok::new(TType::ABS, 0.0));
+                } else {
+                    return Err(CalcError::UnexpectedChar(format!("a{}", self.rest())));
+                }
+            }
+            '+' => self.toks.push(Tok::new(TType::ADD, 0.0)),
+            '-' => {
+                if self.peek().map_or(false, |c| c.is_numeric()) {
+                    self.num(true)?;
+                } else {
+                    self.toks.push(Tok::new(TType::SUB, 0.0));
+                }
+            }
+            '*' => self.toks.push(Tok::new(TType::MUL, 0.0)),
+            '/' => self.toks.push(Tok::new(TType::DIV, 0.0)),
+            '^' => self.toks.push(Tok::new(TType::POW, 0.0)),
+            '%' => self.toks.push(Tok::new(TType::MOD, 0.0)),
+            '(' => self.toks.push(Tok::new(TType::LPAR, 0.0)),
+            ')' => self.toks.push(Tok::new(TType::RPAR, 0.0)),
+            ' ' | '\t' | '\n' | '\r' => {}
             _ => {
-                // Continuar lendo se o proximo caracter for um numero
-                if !character.is_numeric() {
-                    self.throw_error("Unexpected character");
+                if ch.is_numeric() || ch == '.' {
+                    self.cur -= 1;
+                    self.num(false)?;
+                } else {
+                    return Err(CalcError::UnexpectedChar(ch.to_string()));
                 }
-
-                let mut num_value_str = String::from(character);
-                while self.peek().unwrap_or('a').is_numeric() {
-                    match self.peek() {
-                        Some(e) => {
-                            if e.is_numeric() {
-                                num_value_str.push(e);
-                                self.advance();
-                            }
-                        }
-                        _ => {}
-                    };
-                }
-
-                self.tokens.push(Token::new(
-                    TokenType::NUMBER,
-                    num_value_str.trim().parse().unwrap(),
-                ));
             }
         }
+        Ok(())
     }
 
-    fn is_at_end(&self) -> bool {
-        self.current >= self.source.len()
-    }
-
-    fn advance(&mut self) -> char {
-        let value = self.source.as_bytes()[self.current] as char;
-        self.current += 1;
-        value
-    }
-
-    fn peek_word(&mut self, word: &str) -> bool {
-        let mut current_tmp = self.current;
-        for i in 0..word.len() {
-            let src_char = self.source.as_bytes()[current_tmp - 1] as char;
-            let word_char = word.as_bytes()[i] as char;
-
-            if src_char != word_char {
-                return false;
+    fn num(&mut self, neg: bool) -> CalcResult<()> {
+        let mut s = if neg { "-".to_string() } else { String::new() };
+        let mut dot = false;
+        
+        while !self.end() {
+            let c = self.peek().unwrap();
+            if c.is_numeric() {
+                s.push(c);
+                self.adv();
+            } else if c == '.' && !dot {
+                dot = true;
+                s.push(c);
+                self.adv();
+            } else {
+                break;
             }
-
-            if current_tmp > self.source.len() {
-                return false;
-            }
-
-            current_tmp += 1;
         }
-        self.current = current_tmp - 1;
-        return true;
+        
+        let v = s.parse::<f64>()
+            .map_err(|_| CalcError::UnexpectedChar(s.clone()))?;
+        self.toks.push(Tok::new(TType::NUM, v));
+        Ok(())
     }
 
-    fn peek(&mut self) -> Option<char> {
-        if self.is_at_end() {
+    fn end(&self) -> bool {
+        self.cur >= self.src.len()
+    }
+
+    fn adv(&mut self) -> char {
+        let v = self.src.chars().nth(self.cur).unwrap_or('\0');
+        self.cur += 1;
+        v
+    }
+
+    fn peek(&self) -> Option<char> {
+        if self.end() {
             None
         } else {
-            Some(self.source.as_bytes()[self.current] as char)
+            self.src.chars().nth(self.cur)
         }
     }
-}
+    
+    fn rest(&self) -> String {
+        let e = (self.cur + 5).min(self.src.len());
+        self.src[self.cur..e].to_string()
+    }
 
-/// Temporary error sender
-impl<'s> Scanner<'s> {
-    fn throw_error(&self, text: &str) {
-        println!("[Error] {} at {}:{}", text, self.line, self.current);
-        process::exit(0);
+    fn word(&mut self, w: &str) -> bool {
+        let sb = self.src.as_bytes();
+        let wb = w.as_bytes();
+        let st = self.cur - 1;
+        
+        if st + w.len() > self.src.len() {
+            return false;
+        }
+        
+        for i in 0..w.len() {
+            if sb[st + i] != wb[i] {
+                return false;
+            }
+        }
+        
+        self.cur = st + w.len();
+        true
     }
 }
