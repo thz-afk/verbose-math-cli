@@ -1,120 +1,143 @@
-use crate::token::{Token, TokenType};
+use crate::token::{Tok, TType};
+use crate::error::{CalcError, CalcResult};
 
-pub struct Parser<'s> {
-    tokens: &'s Vec<Token>,
+pub struct Parser {
+    toks: Vec<Tok>,
+    cur: usize,
 }
 
-impl<'s> Parser<'s> {
-    pub fn new<'a>(tokens: &'a Vec<Token>) -> Parser<'a> {
-        Parser { tokens }
+impl Parser {
+    pub fn new(toks: Vec<Tok>) -> Parser {
+        Parser { toks, cur: 0 }
     }
 
-    pub fn parse(&mut self) -> i32 {
-        self.scan(0, self.tokens.len())
+    pub fn parse(&mut self) -> CalcResult<f64> {
+        if self.toks.is_empty() {
+            return Err(CalcError::EmptyExpr);
+        }
+        self.expr()
     }
 
-    fn scan(&mut self, esq: usize, dir: usize) -> i32 {
-        if esq == dir {
-            return 0;
-        }
-        let token = self.get_next_token(esq, dir);
-        if token.is_none() {
-            return 0;
-        }
-
-        let token_unwrap = &self.tokens[token.unwrap()];
-        let left = self.scan(esq, token.unwrap());
-        let right = self.scan(token.unwrap() + 1, dir);
-
-        match token_unwrap.token_type {
-            TokenType::NUMBER => {
-                return token_unwrap.get_value();
-            }
-            TokenType::MINUS => return left - right,
-            TokenType::PLUS => return left + right,
-            TokenType::DIVIDE => return left / right,
-            TokenType::MULTIPLY => return left * right,
-            _ => return 0,
-        }
+    fn expr(&mut self) -> CalcResult<f64> {
+        self.add()
     }
 
-    fn get_next_token(&self, esq: usize, dir: usize) -> Option<usize> {
-        // Get least precedende operator
-        let next_plus = self.get_plus(esq, dir);
-        if next_plus.is_some() {
-            return Some(next_plus.unwrap());
-        };
+    fn add(&mut self) -> CalcResult<f64> {
+        let mut l = self.mul()?;
 
-        let next_minus = self.get_minus(esq, dir);
-        if next_minus.is_some() {
-            return Some(next_minus.unwrap());
-        };
-
-        let next_mult = self.get_mult(esq, dir);
-        if next_mult.is_some() {
-            return Some(next_mult.unwrap());
-        };
-
-        let next_literal = self.get_literal(esq, dir);
-        if next_literal.is_some() {
-            return Some(next_literal.unwrap());
-        }
-
-        return None;
-    }
-
-    fn get_plus(&self, esq: usize, dir: usize) -> Option<usize> {
-        for cnt in esq..dir {
-            let current_token = &self.tokens[cnt].token_type;
-            match current_token {
-                TokenType::PLUS => {
-                    return Some(cnt);
-                }
+        while self.m(&[TType::ADD, TType::SUB]) {
+            let op = self.prev().typ.clone();
+            let r = self.mul()?;
+            
+            match op {
+                TType::ADD => l += r,
+                TType::SUB => l -= r,
                 _ => {}
             }
         }
-        None
+        Ok(l)
     }
 
-    fn get_minus(&self, esq: usize, dir: usize) -> Option<usize> {
-        for cnt in esq..dir {
-            let current_token = &self.tokens[cnt].token_type;
-            match current_token {
-                TokenType::MINUS => {
-                    return Some(cnt);
+    fn mul(&mut self) -> CalcResult<f64> {
+        let mut l = self.exp()?;
+
+        while self.m(&[TType::MUL, TType::DIV, TType::MOD]) {
+            let op = self.prev().typ.clone();
+            let r = self.exp()?;
+            
+            match op {
+                TType::MUL => l *= r,
+                TType::DIV => {
+                    if r == 0.0 {
+                        return Err(CalcError::DivByZero);
+                    }
+                    l /= r;
                 }
+                TType::MOD => l %= r,
                 _ => {}
             }
         }
-        None
+        Ok(l)
     }
 
-    fn get_mult(&self, esq: usize, dir: usize) -> Option<usize> {
-        for cnt in esq..dir {
-            let current_token = &self.tokens[cnt].token_type;
-            match current_token {
-                TokenType::MULTIPLY => {
-                    return Some(cnt);
-                }
-                TokenType::DIVIDE => {
-                    return Some(cnt);
-                }
-                _ => {}
-            }
+    fn exp(&mut self) -> CalcResult<f64> {
+        let mut l = self.un()?;
+
+        while self.m(&[TType::POW]) {
+            let r = self.un()?;
+            l = l.powf(r);
         }
-        None
+        Ok(l)
     }
 
-    fn get_literal(&self, esq: usize, dir: usize) -> Option<usize> {
-        for cnt in esq..dir {
-            let current_token = &self.tokens[cnt].token_type;
-            match current_token {
-                TokenType::NUMBER => {
-                    return Some(cnt);
-                }
-                _ => {}
+    fn un(&mut self) -> CalcResult<f64> {
+        if self.m(&[TType::SUB]) {
+            let r = self.un()?;
+            return Ok(-r);
+        }
+        
+        if self.m(&[TType::SQRT]) {
+            let r = self.un()?;
+            return Ok(r.sqrt());
+        }
+        
+        if self.m(&[TType::ABS]) {
+            let r = self.un()?;
+            return Ok(r.abs());
+        }
+
+        self.prim()
+    }
+
+    fn prim(&mut self) -> CalcResult<f64> {
+        if self.m(&[TType::NUM]) {
+            return Ok(self.prev().val);
+        }
+
+        if self.m(&[TType::LPAR]) {
+            let e = self.expr()?;
+            if !self.m(&[TType::RPAR]) {
+                return Err(CalcError::MismatchedParen);
+            }
+            return Ok(e);
+        }
+
+        Err(CalcError::InvalidExpr)
+    }
+
+    fn m(&mut self, typs: &[TType]) -> bool {
+        for t in typs {
+            if self.chk(t) {
+                self.adv();
+                return true;
             }
         }
-        None
+        false
+    }
+
+    fn chk(&self, t: &TType) -> bool {
+        if self.end() {
+            return false;
+        }
+        &self.peek().typ == t
+    }
+
+    fn adv(&mut self) -> &Tok {
+        if !self.end() {
+            self.cur += 1;
+        }
+        self.prev()
+    }
+
+    fn end(&self) -> bool {
+        self.cur >= self.toks.len()
+    }
+
+    fn peek(&self) -> &Tok {
+        &self.toks[self.cur]
+    }
+
+    fn prev(&self) -> &Tok {
+        &self.toks[self.cur - 1]
     }
 }
